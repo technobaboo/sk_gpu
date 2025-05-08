@@ -3737,6 +3737,81 @@ int32_t gl_init_emscripten() {
 
 ///////////////////////////////////////////
 
+#if defined(SKG_LINUX_EGL)
+int32_t gl_init_egl_linux(int32_t *major, int32_t *minor) {
+	// No need to run this function then
+	if (egl_display != EGL_NO_DISPLAY) {
+		eglInitialize(egl_display, &major, &minor);
+		if (eglGetError() != EGL_SUCCESS) { skg_log(skg_log_critical, "Err eglGetDisplay"); return 0; }
+		return 1;
+	}
+	
+	// first try X11
+	EGLDisplay disp = eglGetPlatformDisplay(EGL_PLATFORM_X11_EXT, EGL_DEFAULT_DISPLAY, 0);
+	eglInitialize(egl_display, &major, &minor);
+	if (eglGetError() == EGL_SUCCESS) {
+		skg_log(skg_log_info, "EGL display using X11");
+		egl_display = disp;
+		return 1;
+	}
+	
+	// then try getting the GPU manually (this is surfaceless)
+	const int MAX_DEVICES = 10;
+	EGLDeviceEXT eglDevs[MAX_DEVICES];
+	EGLint numDevices = 0;
+
+	PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = 
+		(PFNEGLQUERYDEVICESEXTPROC)eglGetProcAddress("eglQueryDevicesEXT");
+     if (!eglQueryDevicesEXT) {
+		skg_log(skg_log_critical, "Failed to get eglQueryDevicesEXT");
+		return 0;
+	}
+	PFNEGLQUERYDEVICESTRINGEXTPROC eglQueryDeviceStringEXT =
+    	(PFNEGLQUERYDEVICESTRINGEXTPROC)eglGetProcAddress("eglQueryDeviceStringEXT");
+	if (!eglQueryDeviceStringEXT) {
+		skg_log(skg_log_critical, "Failed to get eglQueryDeviceStringEXT");
+		return 0;
+	}
+	eglQueryDevicesEXT(MAX_DEVICES, eglDevs, &numDevices);
+	skg_logf(skg_log_info, "Found %d EGL devices.", numDevices);
+	
+	EGLDisplay disp = EGL_NO_DISPLAY;
+	for (int idx = 0; idx < numDevices; idx++) {
+		const char* vendor = eglQueryDeviceStringEXT(devices[i], EGL_VENDOR);
+		skg_logf(skg_log_info, "Found EGL device with vendor \"%s\".", vendor);
+		
+		if (vendor && strstr(vendor, "NVIDIA") {
+			skg_log(skg_log_info, "NVIDIA GPU detected, using that");
+			disp = eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, eglDevs[idx], 0);
+			break;
+		}
+	}
+	if (disp == EGL_NO_DISPLAY) {
+		for (int idx = 0; idx < numDevices; idx++) {
+			const char* renderer = eglQueryDeviceStringEXT(devices[i], EGL_RENDERER_EXT);
+			skg_logf(skg_log_info, "Found EGL device with renderer \"%s\".", renderer);
+			
+		}
+	}
+	eglInitialize(egl_display, &major, &minor);
+	if (eglGetError() == EGL_SUCCESS) {
+		skg_log(skg_log_info, "EGL display from GPU");
+		egl_display = disp;
+		return 1;
+	}
+
+	egl_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+	eglInitialize(egl_display, &major, &minor);
+	if (eglGetError() != EGL_SUCCESS) { skg_log(skg_log_critical, "Err eglGetDisplay"); return 0; }
+	skg_log(skg_log_info, "EGL display fallback to default");
+	egl_display = disp;
+	
+	return 1;
+}
+#endif
+
+///////////////////////////////////////////
+
 int32_t gl_init_egl() {
 #ifdef _SKG_GL_LOAD_EGL
 	const EGLint attribs[] = {
@@ -3755,44 +3830,19 @@ int32_t gl_init_egl() {
 	EGLint format;
 	EGLint numConfigs;
 	
+	int32_t major=0, minor=0;
+	#if defined(SKG_LINUX_EGL)
+	if !gl_init_egl_linux(&major, &minor) { skg_log(skg_log_critical, "Err eglGetDisplay"); return 0;	}
+	#else
 	// No display means no overrides
 	if (egl_display == EGL_NO_DISPLAY) {
-		#if defined(SKG_LINUX_EGL)
-		const char* display = getenv("DISPLAY");
-		if (!display || display[0] == '\0') {
-			const int MAX_DEVICES = 10;
-			EGLDeviceEXT eglDevs[MAX_DEVICES];
-			EGLint numDevices = 0;
-
-			PFNEGLQUERYDEVICESEXTPROC eglQueryDevicesEXT = 
-				(PFNEGLQUERYDEVICESEXTPROC)eglGetProcAddress("eglQueryDevicesEXT");
-			if (!eglQueryDevicesEXT) {
-				skg_log(skg_log_critical, "Failed to get eglQueryDevicesEXT");
-				return 0;
-			}
-
-			eglQueryDevicesEXT(MAX_DEVICES, eglDevs, &numDevices);
-			skg_logf(skg_log_info, "Found %d EGL devices.", numDevices);
-			for (int idx = 0; idx < numDevices; idx++) {
-				EGLDisplay disp = eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, eglDevs[idx], 0);
-				if (disp != EGL_NO_DISPLAY) {
-					egl_display = disp;
-					break;
-				}
-			}
-		} else {
-			egl_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-		}
-		#else
 		egl_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-		#endif
-		
 		if (eglGetError() != EGL_SUCCESS) { skg_log(skg_log_critical, "Err eglGetDisplay"); return 0; }
 	}
 	
-	int32_t major=0, minor=0;
 	eglInitialize(egl_display, &major, &minor);
-
+	#endif
+	
 	if (eglGetError() != EGL_SUCCESS) { skg_log(skg_log_critical, "Err eglInitialize"); return 0; }
 	char version[128];
 	snprintf(version, sizeof(version), "EGL version %d.%d", major, minor);
